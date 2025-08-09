@@ -1,359 +1,376 @@
-# 🚀 Rate Limiter - Sistema Avançado de Controle de Tráfego
+# Rate Limiter - Documentação Técnica
 
-[![Go Version](https://img.shields.io/badge/go-1.21%2B-blue.svg)](https://golang.org/)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
-[![Coverage](https://img.shields.io/badge/coverage-90%25-brightgreen.svg)]()
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
+Sistema de controle de tráfego que limita o número de requisições por IP ou token de acesso, implementado em Go com arquitetura limpa e estratégias de armazenamento plugáveis.
 
-Um **middleware de rate limiter** robusto e escalável desenvolvido em Go para controlar o tráfego de requisições em serviços web. Oferece limitação inteligente por IP e token de acesso, com múltiplas estratégias de armazenamento e observabilidade completa.
+## 📖 Como Funciona
 
-## 🎯 **Características Principais**
+### Conceito Básico
 
-### ✅ **Desafio_Rate_Limiter**
-- ✅ Middleware injetável para servidor web
-- ✅ Configuração flexível de limites por segundo  
-- ✅ Bloqueio temporal configurable para IPs/tokens
-- ✅ Configuração via variáveis de ambiente e `.env`
-- ✅ Limitação simultânea por IP e token com prioridade
-- ✅ Resposta HTTP 429 com mensagem específica
-- ✅ Armazenamento Redis com fallback para memória
-- ✅ Strategy Pattern para múltiplos storages
-- ✅ Lógica de rate limiting completamente separada
+O rate limiter controla o tráfego de requisições aplicando limites baseados em:
+- **Endereço IP**: Limita requisições por IP de origem
+- **Token de Acesso**: Limita requisições por token específico (via header `API_KEY`)
 
-### 🚀 **Funcionalidades Avançadas**
-- **Clean Architecture** com camadas bem definidas
-- **Observabilidade completa** com logs estruturados e métricas
-- **Alta performance** com operações concorrentes thread-safe  
-- **Escalabilidade horizontal** via Redis distribuído
-- **API de gerenciamento** para status e reset de limites
-- **Graceful shutdown** e health checks
-- **Testes abrangentes** (unitários, integração, E2E)
+### Fluxo de Funcionamento
 
-## 📋 **Requisitos**
-
-- **Go 1.21+**
-- **Redis 6.0+** (opcional, fallback para memória)
-- **Docker & Docker Compose** (para desenvolvimento)
-
-## 🚀 **Quick Start**
-
-### 1. **Clone o Repositório**
-```bash
-git clone <repository-url>
-cd rate-limiter
+```
+1. Requisição chega → Middleware extrai IP e Token
+2. Service detecta tipo de limitação (Token tem prioridade sobre IP)
+3. Storage verifica se chave está bloqueada
+4. Se não bloqueada → incrementa contador
+5. Se exceder limite → bloqueia por tempo configurável
+6. Retorna resultado (permitido/bloqueado) com headers informativos
 ```
 
-### 2. **Configure o Ambiente**
-```bash
-# Copie o arquivo de exemplo
-cp .env.example .env
+### Detecção Automática de Tipo
 
-# Configure as variáveis (opcional, tem defaults sensatos)
-nano .env
+```go
+// Prioridade de detecção:
+if token_fornecido && token_não_vazio {
+    return TokenLimiter  // Usa configuração do token
+} else {
+    return IPLimiter     // Usa configuração de IP
+}
 ```
 
-### 3. **Inicie o Redis (Opcional)**
+**Exemplo**: Se IP tem limite de 10 req/min e token tem 100 req/min, o sistema usará 100 req/min quando o token for fornecido.
+
+### Sliding Window
+
+O sistema usa **sliding window** para contagem de requisições:
+- Janela de tempo configurável (ex: 60 segundos)
+- Contador reseta automaticamente após a janela
+- Bloqueio temporal quando limite excedido
+
+## ⚙️ Configuração
+
+### 1. Variáveis de Ambiente (.env)
+
 ```bash
-# Com Docker Compose
-docker-compose up -d redis
-
-# Ou use fallback para memória (automático se Redis falhar)
-```
-
-### 4. **Execute a Aplicação**
-```bash
-# Instale dependências
-go mod tidy
-
-# Execute o servidor
-go run cmd/api/main.go
-```
-
-### 5. **Teste os Endpoints**
-```bash
-# Health check
-curl http://localhost:8080/health
-
-# Endpoint principal (rate limited)
-curl http://localhost:8080/
-
-# Com token
-curl -H "X-Api-Token: premium_token_123" http://localhost:8080/
-
-# Métricas do sistema
-curl http://localhost:8080/metrics
-```
-
-## ⚙️ **Configuração**
-
-### **Variáveis de Ambiente (.env)**
-```bash
-# Servidor
-SERVER_PORT=8080
-GIN_MODE=debug
-
-# Rate Limiting  
-DEFAULT_IP_LIMIT=10        # Requisições por minuto por IP
-DEFAULT_TOKEN_LIMIT=100    # Requisições por minuto por token
+# === RATE LIMITING ===
+DEFAULT_IP_LIMIT=10        # Limite padrão por IP (req/min)
+DEFAULT_TOKEN_LIMIT=100    # Limite padrão por token (req/min)
 RATE_WINDOW=60            # Janela de tempo em segundos
-BLOCK_DURATION=180        # Tempo de bloqueio em segundos
+BLOCK_DURATION=180        # Tempo de bloqueio em segundos (3min)
 
-# Redis (opcional)
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
-REDIS_DB=0
+# === REDIS (Storage Principal) ===
+REDIS_HOST=localhost      # Host do Redis
+REDIS_PORT=6379          # Porta do Redis
+REDIS_PASSWORD=          # Senha (opcional)
+REDIS_DB=0              # Database (0-15)
 
-# Logging
-LOG_LEVEL=info            # debug, info, warn, error
-LOG_FORMAT=json           # json, text
+# === STORAGE STRATEGY ===
+STORAGE_TYPE=redis       # "redis" ou "memory"
 
-# Tokens
+# === SERVIDOR ===
+SERVER_PORT=8080         # Porta da aplicação
+GIN_MODE=debug          # "debug" ou "release"
+
+# === LOGGING ===
+LOG_LEVEL=info          # debug, info, warn, error
+LOG_FORMAT=json         # json ou text
+
+# === TOKENS CUSTOMIZADOS ===
 TOKEN_CONFIG_FILE=internal/config/tokens.json
 ```
 
-### **Configuração de Tokens (tokens.json)**
+### 2. Configuração de Tokens Específicos
+
+Arquivo: `internal/config/tokens.json`
+
 ```json
 {
   "tokens": {
-    "premium_token_123": {
-      "token": "premium_token_123",
+    "premium_token_abc123": {
+      "token": "premium_token_abc123",
       "limit": 1000,
-      "description": "Premium API access"
+      "description": "Token premium com limite alto"
     },
-    "basic_token_456": {
-      "token": "basic_token_456", 
-      "limit": 100,
-      "description": "Basic API access"
+    "basic_token_def456": {
+      "token": "basic_token_def456", 
+      "limit": 50,
+      "description": "Token básico com limite baixo"
+    },
+    "enterprise_xyz789": {
+      "token": "enterprise_xyz789",
+      "limit": 5000,
+      "description": "Token enterprise para clientes corporativos"
     }
   }
 }
 ```
 
-## 🔧 **API Reference**
+### 3. Estratégias de Storage
 
-### **Endpoints Principais**
+#### Redis (Recomendado para Produção)
+- **Vantagens**: Persistente, distribuído, alta performance
+- **Configuração**: Definir variáveis REDIS_* no .env
+- **Fallback**: Se Redis falhar, usa Memory automaticamente
 
-| Método | Endpoint | Descrição | Rate Limited |
-|--------|----------|-----------|--------------|
-| `GET` | `/` | Endpoint principal de exemplo | ✅ Sim |
-| `GET` | `/health` | Health check do serviço | ❌ Não |
-| `GET` | `/metrics` | Métricas de sistema | ❌ Não |
+#### Memory (Desenvolvimento/Fallback)
+- **Vantagens**: Sem dependências externas, setup zero
+- **Limitações**: Dados perdidos ao reiniciar, não distribuído
+- **Configuração**: `STORAGE_TYPE=memory`
 
-### **Endpoints Administrativos**
+## 🔧 Como Usar
 
-| Método | Endpoint | Descrição | Rate Limited |
-|--------|----------|-----------|--------------|
-| `GET` | `/admin/status` | Status de rate limits | ❌ Não |
-| `POST` | `/admin/reset` | Reset de contadores | ❌ Não |
+### 1. Middleware Injetável
 
-### **Headers de Resposta Rate Limiting**
-```http
-X-RateLimit-Limit: 10          # Limite configurado
-X-RateLimit-Remaining: 7       # Requisições restantes  
-X-RateLimit-Reset: 1640000000  # Timestamp do reset
-X-RateLimit-Type: ip           # Tipo: "ip" ou "token"
-Retry-After: 60                # Segundos para tentar novamente (em 429)
+```go
+// Setup no servidor Gin
+router := gin.New()
+
+// Middleware aplicado a rotas específicas
+rateLimiterMiddleware := middleware.NewRateLimiterMiddleware(service, logger)
+
+protected := router.Group("/api")
+protected.Use(rateLimiterMiddleware)
+{
+    protected.GET("/users", getUsersHandler)
+    protected.POST("/orders", createOrderHandler)
+}
 ```
 
-### **Exemplos de Uso**
+### 2. Headers de Requisição
 
-#### **1. Consultar Status de IP**
 ```bash
-curl "http://localhost:8080/admin/status?key=192.168.1.100&type=ip"
+# Limitação por IP (automática)
+curl http://localhost:8080/api/users
+
+# Limitação por Token (prioritária)
+curl -H "API_KEY: premium_token_abc123" http://localhost:8080/api/users
 ```
 
-**Resposta:**
+### 3. Headers de Resposta
+
+O sistema sempre retorna headers informativos:
+
+```http
+# Em requisições permitidas (HTTP 200)
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 95
+X-RateLimit-Reset: 1640995200
+X-RateLimit-Type: token
+
+# Em requisições bloqueadas (HTTP 429)
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1640995200
+X-RateLimit-Type: token
+Retry-After: 180
+```
+
+### 4. Resposta HTTP 429
+
+Quando o limite é excedido:
+
+```json
+{
+  "error": "rate_limit_exceeded",
+  "message": "you have reached the maximum number of requests or actions allowed within a certain time frame",
+  "details": {
+    "limit": 100,
+    "remaining": 0,
+    "reset_time": 1640995200,
+    "limiter_type": "token",
+    "blocked_until": 1640995380
+  }
+}
+```
+
+## 📊 Monitoramento e Administração
+
+### 1. Health Check
+
+```bash
+curl http://localhost:8080/health
+```
+
+```json
+{
+  "status": "healthy",
+  "service": "Rate Limiter API",
+  "timestamp": "2025-01-01T15:30:00Z",
+  "version": "1.0.0"
+}
+```
+
+### 2. Métricas do Sistema
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+```json
+{
+  "service": "Rate Limiter API",
+  "uptime": "2h30m15s",
+  "memory": {
+    "alloc": "12.5 MB",
+    "total_alloc": "45.2 MB",
+    "sys": "25.1 MB"
+  },
+  "goroutines": 15,
+  "rate_limiter": {
+    "storage_type": "redis",
+    "default_ip_limit": 10,
+    "default_token_limit": 100
+  }
+}
+```
+
+### 3. Status de Rate Limiting
+
+```bash
+# Verificar status de um IP
+curl "http://localhost:8080/admin/status?key=192.168.1.100&type=ip"
+
+# Verificar status de um token
+curl "http://localhost:8080/admin/status?key=premium_token_abc123&type=token"
+```
+
 ```json
 {
   "key": "192.168.1.100",
   "limiter_type": "ip",
   "limit": 10,
-  "current": 3,
-  "remaining": 7,
-  "reset_time": "2025-01-01T15:30:00Z",
-  "blocked": false
+  "current": 7,
+  "remaining": 3,
+  "reset_time": "2025-01-01T15:31:00Z",
+  "blocked": false,
+  "blocked_until": null
 }
 ```
 
-#### **2. Reset de Contador**
+### 4. Reset de Contadores
+
 ```bash
+# Reset de IP
 curl -X POST http://localhost:8080/admin/reset \
   -H "Content-Type: application/json" \
   -d '{"key": "192.168.1.100", "type": "ip"}'
+
+# Reset de Token
+curl -X POST http://localhost:8080/admin/reset \
+  -H "Content-Type: application/json" \
+  -d '{"key": "premium_token_abc123", "type": "token"}'
 ```
 
-**Resposta:**
-```json
-{
-  "status": "success",
-  "message": "Rate limit reset successfully",
-  "key": "192.168.1.100",
-  "type": "ip"
+## 🏗️ Arquitetura Técnica
+
+### Clean Architecture
+
+```
+┌─────────────────┐
+│   Handlers      │ ← HTTP endpoints, validação de entrada
+├─────────────────┤
+│   Middleware    │ ← Extração IP/Token, orquestração
+├─────────────────┤
+│   Service       │ ← Lógica de negócio, detecção de tipo
+├─────────────────┤
+│   Storage       │ ← Persistência (Redis/Memory)
+├─────────────────┤
+│   Domain        │ ← Entidades, interfaces, regras
+└─────────────────┘
+```
+
+### Strategy Pattern
+
+```go
+// Interface comum
+type RateLimiterStorage interface {
+    Increment(ctx, key string, limit int, window time.Duration) (int, time.Time, error)
+    IsBlocked(ctx, key string) (bool, *time.Time, error)
+    Block(ctx, key string, duration time.Duration) error
+    // ... outros métodos
 }
+
+// Implementações intercambiáveis
+type RedisStorage struct { ... }
+type MemoryStorage struct { ... }
+
+// Factory para criação
+factory.CreateStorage(config, logger) // Retorna implementação baseada na config
 ```
 
-#### **3. Resposta de Rate Limit Excedido (429)**
-```json
-{
-  "error": "rate_limit_exceeded",
-  "message": "you have reached the maximum number of requests or actions allowed within a certain time frame",
-  "limit": 10,
-  "window": 60,
-  "retry_after": 45
-}
-```
+### Separação de Responsabilidades
 
-## 🧪 **Testes**
+- **Middleware**: Extrai IP/Token, chama service, define headers HTTP
+- **Service**: Contém toda lógica de rate limiting, detecção de tipo
+- **Storage**: Operações de persistência, contadores, bloqueios
+- **Config**: Carregamento de configurações (.env, tokens.json)
 
-### **Executar Todos os Testes**
+## 🧪 Exemplos Práticos
+
+### Cenário 1: Limitação por IP
+
 ```bash
-# Todos os testes
-go test ./... -v
+# Configuração: DEFAULT_IP_LIMIT=5, RATE_WINDOW=60
 
-# Com coverage
-go test ./... -cover
-
-# Testes específicos
-go test ./internal/service/... -v
-go test ./tests/e2e/... -v
-```
-
-### **Testes de Carga**
-```bash
-# Exemplo com Apache Bench
-ab -n 1000 -c 10 http://localhost:8080/
-
-# Exemplo com curl em loop
-for i in {1..20}; do
-  curl http://localhost:8080/ &
+# Requisições 1-5: HTTP 200
+for i in {1..5}; do
+  curl http://localhost:8080/
 done
-wait
+
+# Requisição 6: HTTP 429 (bloqueada)
+curl http://localhost:8080/
+# Resposta: rate_limit_exceeded
+
+# Após 60 segundos: Contador reseta
+# Após BLOCK_DURATION: Desbloqueio automático
 ```
 
-## 🏗️ **Arquitetura**
+### Cenário 2: Token Sobrepõe IP
 
-### **Estrutura do Projeto**
-```
-rate-limiter/
-├── cmd/api/                 # Aplicação principal
-│   └── main.go
-├── internal/               # Código interno
-│   ├── domain/            # Entidades e interfaces
-│   ├── config/            # Configurações
-│   ├── logger/            # Sistema de logging
-│   ├── storage/           # Camada de persistência
-│   ├── service/           # Lógica de negócio
-│   ├── middleware/        # Middleware Gin
-│   └── handler/           # Handlers HTTP
-├── tests/                 # Testes E2E
-├── step-by-step/         # Documentação do desenvolvimento
-├── docker-compose.yml    # Redis para desenvolvimento
-├── .env.example         # Configurações de exemplo
-└── README.md           # Esta documentação
+```bash
+# IP 192.168.1.100 já atingiu limite (bloqueado)
+curl http://localhost:8080/
+# HTTP 429
+
+# Mesmo IP com token válido: Permitido
+curl -H "API_KEY: premium_token_abc123" http://localhost:8080/
+# HTTP 200 (usa limite do token, não do IP)
 ```
 
-### **Fluxo de Requisição**
-```mermaid
-graph TD
-    A[Cliente] --> B[Gin Router]
-    B --> C[Rate Limiter Middleware]
-    C --> D{Extrair IP/Token}
-    D --> E[Rate Limiter Service]
-    E --> F{Storage Layer}
-    F -->|Redis| G[Redis Storage]
-    F -->|Memória| H[Memory Storage]
-    G --> I{Verificar Limite}
-    H --> I
-    I -->|Permitido| J[Continuar Requisição]
-    I -->|Bloqueado| K[HTTP 429]
-    J --> L[Handler da Aplicação]
-    K --> M[Resposta Error]
-    L --> N[Resposta Success]
+### Cenário 3: Tokens Diferentes
+
+```bash
+# Token premium (limite 1000)
+curl -H "API_KEY: premium_token_abc123" http://localhost:8080/
+# HTTP 200
+
+# Token básico (limite 50)
+curl -H "API_KEY: basic_token_def456" http://localhost:8080/
+# HTTP 200 (contador separado)
+
+# Token desconhecido (usa DEFAULT_TOKEN_LIMIT=100)
+curl -H "API_KEY: unknown_token" http://localhost:8080/
+# HTTP 200
 ```
 
-## 📊 **Observabilidade**
+## 🚀 Instalação e Execução
 
-### **Logs Estruturados**
-```json
-{
-  "timestamp": "2025-01-01T15:30:00.000Z",
-  "level": "info",
-  "message": "Request allowed by rate limiter",
-  "component": "rate_limiter",
-  "client_ip": "192.168.1.100",
-  "api_token": "premium***",
-  "limiter_type": "token",
-  "limit": 1000,
-  "remaining": 995,
-  "request_id": "req-123"
-}
+```bash
+# 1. Clone o repositório
+git clone <repository-url>
+cd desafio_tecnico01
+
+# 2. Instale dependências
+go mod tidy
+
+# 3. Configure ambiente (opcional)
+cp .env.example .env
+nano .env
+
+# 4. Inicie Redis (opcional)
+docker-compose up -d redis
+
+# 5. Execute aplicação
+go run cmd/api/main.go
+
+# 6. Teste funcionamento
+curl http://localhost:8080/health
 ```
 
-### **Métricas de Sistema**
-- **Uptime** do serviço
-- **Uso de memória** detalhado
-- **Goroutines ativas**
-- **Estatísticas GC**
-- **Contadores de rate limiting**
+---
 
-## 🚀 **Deployment**
-
-### **Docker**
-```dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod download
-RUN go build -o rate-limiter cmd/api/main.go
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /root/
-COPY --from=builder /app/rate-limiter .
-COPY --from=builder /app/.env .
-COPY --from=builder /app/internal/config/tokens.json ./internal/config/
-CMD ["./rate-limiter"]
-```
-
-### **Kubernetes**
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rate-limiter
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: rate-limiter
-  template:
-    metadata:
-      labels:
-        app: rate-limiter
-    spec:
-      containers:
-      - name: rate-limiter
-        image: rate-limiter:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: REDIS_HOST
-          value: "redis-service"
-        - name: SERVER_PORT
-          value: "8080"
-```
-
-## 🔒 **Segurança**
-
-- **Rate limiting** previne ataques DDoS
-- **Token masking** em logs (primeiros 8 chars + ***)
-- **IP validation** e sanitização
-- **Graceful shutdown** evita corrupção de dados
-- **Error handling** robusto sem vazamento de informações
-
-
-## 📄 **Licença**
-
-Este projeto está sob a licença MIT. Veja [LICENSE](LICENSE) para mais detalhes.
-
+Este rate limiter implementa todas as funcionalidades necessárias para controle de tráfego em APIs de produção, com configuração flexível, monitoramento completo e arquitetura escalável.
