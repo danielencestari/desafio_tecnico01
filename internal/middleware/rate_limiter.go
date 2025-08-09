@@ -161,17 +161,20 @@ func (m *RateLimiterMiddleware) extractClientIP(c *gin.Context) string {
 
 // extractAPIToken extrai o token de API dos headers
 func (m *RateLimiterMiddleware) extractAPIToken(c *gin.Context) string {
-	// Prioridade: X-Api-Token > Api-Token
-	
-	if token := c.GetHeader("X-Api-Token"); token != "" {
-		return strings.TrimSpace(token)
-	}
+    // Prioridade: API_KEY (especificação) > X-Api-Token > Api-Token
+    if token := c.GetHeader("API_KEY"); token != "" {
+        return strings.TrimSpace(token)
+    }
 
-	if token := c.GetHeader("Api-Token"); token != "" {
-		return strings.TrimSpace(token)
-	}
+    if token := c.GetHeader("X-Api-Token"); token != "" {
+        return strings.TrimSpace(token)
+    }
 
-	return ""
+    if token := c.GetHeader("Api-Token"); token != "" {
+        return strings.TrimSpace(token)
+    }
+
+    return ""
 }
 
 // setRateLimitHeaders define headers informativos de rate limiting

@@ -91,15 +91,15 @@ func (s *RateLimiterService) CheckLimit(ctx context.Context, ip, token string) (
 		return nil, fmt.Errorf("failed to increment counter: %w", err)
 	}
 
-	// Calcula remaining
-	remaining := rule.Limit - currentCount
-	if remaining < 0 {
-		remaining = 0
-	}
+    // Calcula remaining
+    remaining := rule.Limit - currentCount
+    if remaining < 0 {
+        remaining = 0
+    }
 
-	// Verifica se excedeu o limite
-	// Importante: quando currentCount >= limit, bloqueia
-	allowed := currentCount < rule.Limit
+    // Verifica se excedeu o limite
+    // Importante: permitir até o limite inclusivo (ex.: 10ª requisição ainda é permitida)
+    allowed := currentCount <= rule.Limit
 	
 	// Se excedeu o limite, bloqueia por X minutos
 	if !allowed {
@@ -205,8 +205,13 @@ func (s *RateLimiterService) GetStatus(ctx context.Context, key string, limiterT
 	if err != nil {
 		return nil, fmt.Errorf("failed to get status: %w", err)
 	}
-	
-	return status, nil
+    
+    // Enriquecer o status com o tipo de limiter solicitado
+    if status != nil {
+        status.Type = limiterType
+    }
+    
+    return status, nil
 }
 
 // Reset limpa os dados de rate limit para uma chave

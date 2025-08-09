@@ -1,22 +1,22 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+    "context"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
 
-	"github.com/gin-gonic/gin"
+    "github.com/gin-gonic/gin"
 
-	"rate-limiter/internal/config"
-	"rate-limiter/internal/handler"
-	"rate-limiter/internal/logger"
-	"rate-limiter/internal/service"
-	"rate-limiter/internal/storage"
+    "rate-limiter/internal/config"
+    "rate-limiter/internal/handler"
+    "rate-limiter/internal/logger"
+    "rate-limiter/internal/service"
+    "rate-limiter/internal/storage"
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 	// Obter configurações do servidor
 	serverConfig := configLoader.GetConfig()
 
-	// Inicializar logger
+    // Inicializar logger
 	appLogger := logger.NewLogger(serverConfig.LogLevel, serverConfig.LogFormat)
 	appLogger.Info("Starting Rate Limiter API", map[string]interface{}{
 		"version":   "1.0.0",
@@ -38,9 +38,32 @@ func main() {
 		"port":      serverConfig.ServerPort,
 	})
 
-	// Inicializar storage (Memory por padrão para simplicidade)
-	appLogger.Info("Using memory storage", nil)
-	rateLimiterStorage := storage.NewMemoryStorage(appLogger)
+    // Inicializar storage: usar Redis por padrão; permitir alternar via STORAGE_TYPE
+    storageType := os.Getenv("STORAGE_TYPE")
+    if storageType == "" {
+        storageType = "redis"
+    }
+
+    storageCfg := storage.BuildStorageConfigFromEnv(
+        storageType,
+        serverConfig.RedisHost,
+        serverConfig.RedisPort,
+        serverConfig.RedisPassword,
+        serverConfig.RedisDB,
+    )
+
+    factory := storage.NewStorageFactory()
+    rateLimiterStorage, err := factory.CreateStorage(storageCfg, appLogger)
+    if err != nil {
+        appLogger.Error("Failed to initialize configured storage, falling back to memory", err, map[string]interface{}{
+            "storage_type": storageType,
+        })
+        rateLimiterStorage = storage.NewMemoryStorage(appLogger)
+    } else {
+        appLogger.Info("Storage initialized", map[string]interface{}{
+            "type": storageType,
+        })
+    }
 
 	// Inicializar service
 	rateLimiterService := service.NewRateLimiterService(rateLimiterStorage, cfg, appLogger)

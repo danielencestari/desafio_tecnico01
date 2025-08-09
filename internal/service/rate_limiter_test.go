@@ -138,16 +138,16 @@ func TestRateLimiterService_CheckLimit_IPLimiting(t *testing.T) {
 			},
 			expectError: false,
 		},
-		{
-			name:         "Should block IP request at limit",
+        {
+            name:         "Should allow IP request at limit",
 			ip:           "192.168.1.2",
 			token:        "",
 			currentCount: 10,
 			isBlocked:    false,
 			expectedResult: &domain.RateLimitResult{
-				Allowed:     false,
+                Allowed:     true,
 				Limit:       10,
-				Remaining:   0,
+                Remaining:   0,
 				LimiterType: domain.IPLimiter,
 			},
 			expectError: false,
@@ -189,7 +189,7 @@ func TestRateLimiterService_CheckLimit_IPLimiting(t *testing.T) {
 				mockStorage.On("Increment", ctx, expectedKey, config.DefaultIPLimit, time.Duration(config.Window)*time.Second).
 					Return(tt.currentCount, resetTime, nil)
 				
-				if tt.currentCount >= config.DefaultIPLimit {
+                if tt.currentCount > config.DefaultIPLimit {
 					blockDuration := time.Duration(config.BlockDuration) * time.Second
 					mockStorage.On("Block", ctx, expectedKey, blockDuration).Return(nil)
 				}
@@ -279,15 +279,15 @@ func TestRateLimiterService_CheckLimit_TokenLimiting(t *testing.T) {
 			},
 			expectError: false,
 		},
-		{
-			name:          "Should block basic token at limit",
+        {
+            name:          "Should allow basic token at limit",
 			ip:            "192.168.1.4",
 			token:         "basic_token",
 			currentCount:  50,
 			isBlocked:     false,
 			expectedLimit: 50,
 			expectedResult: &domain.RateLimitResult{
-				Allowed:     false,
+                Allowed:     true,
 				Limit:       50,
 				Remaining:   0,
 				LimiterType: domain.TokenLimiter,
@@ -316,7 +316,7 @@ func TestRateLimiterService_CheckLimit_TokenLimiting(t *testing.T) {
 				mockStorage.On("Increment", ctx, expectedKey, tt.expectedLimit, time.Duration(config.Window)*time.Second).
 					Return(tt.currentCount, resetTime, nil)
 				
-				if tt.currentCount >= tt.expectedLimit {
+                if tt.currentCount > tt.expectedLimit {
 					blockDuration := time.Duration(config.BlockDuration) * time.Second
 					mockStorage.On("Block", ctx, expectedKey, blockDuration).Return(nil)
 				}

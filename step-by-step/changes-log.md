@@ -1,5 +1,67 @@
 # 📝 LOG DE ALTERAÇÕES - RATE LIMITER
 
+## 📅 2025-08-09 - SIMPLIFICAÇÃO DA ESTRUTURA ✅
+
+### 🎯 Objetivo da Fase
+Simplificar a estrutura do projeto movendo o arquivo `.env` do diretório `desafio_rate_limiter/` para o diretório principal do projeto.
+
+### ✨ Alterações Realizadas
+
+#### 1. Movimentação de Arquivo
+- **Arquivo movido**: `.env`
+- **De**: `/desafio_rate_limiter/.env`
+- **Para**: `/.env` (diretório principal)
+
+#### 2. Limpeza de Diretório
+- **Diretório removido**: `desafio_rate_limiter/`
+- **Motivo**: Estava vazio após mover o .env
+
+### 🔧 Conteúdo do .env
+```bash
+# Rate Limiter Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_DB=0
+DEFAULT_IP_LIMIT=10
+DEFAULT_TOKEN_LIMIT=100
+RATE_WINDOW=60
+BLOCK_DURATION=180
+SERVER_PORT=8080
+GIN_MODE=debug
+LOG_LEVEL=info
+LOG_FORMAT=json
+```
+
+### 🧪 Validações Realizadas
+- ✅ **Teste de funcionamento**: Aplicação iniciou corretamente
+- ✅ **Endpoint health**: Resposta HTTP 200 com JSON válido
+- ✅ **Carregamento de configurações**: godotenv.Load() funcionando no diretório principal
+- ✅ **Sem impacto**: Nenhuma alteração de código necessária
+
+### 📊 Benefícios da Simplificação
+- ✅ **Estrutura mais limpa**: `.env` no local padrão esperado
+- ✅ **Convenção padrão**: Segue best practices de projetos Go
+- ✅ **Menos diretórios**: Estrutura mais enxuta e organizada
+- ✅ **Compatibilidade**: Mantém funcionamento com godotenv.Load() sem parâmetros
+
+### 🔧 Funcionamento do Config Loader
+O `internal/config/config.go` já estava preparado para esta mudança:
+```go
+// Linha 61: godotenv.Load() busca .env no diretório atual
+if err := godotenv.Load(); err != nil {
+    fmt.Println("Warning: .env file not found, using system environment variables")
+}
+```
+
+### 📈 Estado do Projeto
+- **Estrutura**: Simplificada e mais limpa
+- **Funcionalidade**: 100% mantida
+- **Testes**: Todos continuam passando
+- **Configuração**: Mais intuitiva e padrão
+
+---
+
 ## 📅 2025-06-06 - FASE 6: SERVICE LAYER CONCLUÍDA ✅
 
 ### 🎯 Objetivo da Fase
