@@ -1,0 +1,535 @@
+package storage
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"rate-limiter/internal/domain"
+	"rate-limiter/internal/logger"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+// MockRedisClient mock do cliente Redis
+type MockRedisClient struct {
+	mock.Mock
+}
+
+func (m *MockRedisClient) Get(ctx context.Context, key string) *redis.StringCmd {
+	args := m.Called(ctx, key)
+	cmd := redis.NewStringCmd(ctx, "get", key)
+	
+	if err := args.Error(1); err != nil {
+		cmd.SetErr(err)
+	} else {
+		cmd.SetVal(args.String(0))
+	}
+	
+	return cmd
+}
+
+func (m *MockRedisClient) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd {
+	args := m.Called(ctx, key, value, expiration)
+	cmd := redis.NewStatusCmd(ctx, "set", key, value)
+	
+	if err := args.Error(0); err != nil {
+		cmd.SetErr(err)
+	} else {
+		cmd.SetVal("OK")
+	}
+	
+	return cmd
+}
+
+func (m *MockRedisClient) Eval(ctx context.Context, script string, keys []string, args ...interface{}) *redis.Cmd {
+	mockArgs := m.Called(ctx, script, keys, args)
+	cmd := redis.NewCmd(ctx, "eval", script)
+	
+	if err := mockArgs.Error(1); err != nil {
+		cmd.SetErr(err)
+	} else {
+		cmd.SetVal(mockArgs.Get(0))
+	}
+	
+	return cmd
+}
+
+func (m *MockRedisClient) Del(ctx context.Context, keys ...string) *redis.IntCmd {
+	args := m.Called(ctx, keys)
+	cmd := redis.NewIntCmd(ctx, "del")
+	
+	if err := args.Error(1); err != nil {
+		cmd.SetErr(err)
+	} else {
+		cmd.SetVal(args.Get(0).(int64))
+	}
+	
+	return cmd
+}
+
+func (m *MockRedisClient) Ping(ctx context.Context) *redis.StatusCmd {
+	args := m.Called(ctx)
+	cmd := redis.NewStatusCmd(ctx, "ping")
+	
+	if err := args.Error(0); err != nil {
+		cmd.SetErr(err)
+	} else {
+		cmd.SetVal("PONG")
+	}
+	
+	return cmd
+}
+
+func TestRedisStorage_Get(t *testing.T) {
+	tests := []struct {
+		name        string
+		key         string
+		redisResult string
+		redisError  error
+		expected    *domain.RateLimitStatus
+		expectError bool
+	}{
+		{
+			name:        "Should return status when key exists",
+			key:         "rate_limit:ip:192.168.1.1",
+			redisResult: `{"key":"rate_limit:ip:192.168.1.1","count":5,"limit":10,"window":60,"lastReset":"2025-01-01T10:00:00Z","isBlocked":false}`,
+			redisError:  nil,
+			expected: &domain.RateLimitStatus{
+				Key:       "rate_limit:ip:192.168.1.1",
+				Count:     5,
+				Limit:     10,
+				Window:    60,
+				LastReset: time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
+				IsBlocked: false,
+			},
+			expectError: false,
+		},
+		{
+			name:        "Should return nil when key doesn't exist",
+			key:         "rate_limit:ip:192.168.1.2",
+			redisResult: "",
+			redisError:  redis.Nil,
+			expected:    nil,
+			expectError: false,
+		},
+		{
+			name:        "Should return error on Redis error",
+			key:         "rate_limit:ip:192.168.1.3",
+			redisResult: "",
+			redisError:  errors.New("connection error"),
+			expected:    nil,
+			expectError: true,
+		},
+		{
+			name:        "Should return error on invalid JSON",
+			key:         "rate_limit:ip:192.168.1.4",
+			redisResult: "invalid json",
+			redisError:  nil,
+			expected:    nil,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockClient := new(MockRedisClient)
+			testLogger := logger.NewLogger("debug", "text")
+			
+			storage := &RedisStorage{
+				client: mockClient,
+				logger: testLogger,
+			}
+
+			ctx := context.Background()
+			mockClient.On("Get", ctx, tt.key).Return(tt.redisResult, tt.redisError)
+
+			// Act
+			result, err := storage.Get(ctx, tt.key)
+
+			// Assert
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				if tt.expected == nil {
+					assert.Nil(t, result)
+				} else {
+					assert.Equal(t, tt.expected.Key, result.Key)
+					assert.Equal(t, tt.expected.Count, result.Count)
+					assert.Equal(t, tt.expected.Limit, result.Limit)
+					assert.Equal(t, tt.expected.Window, result.Window)
+					assert.Equal(t, tt.expected.IsBlocked, result.IsBlocked)
+				}
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRedisStorage_Set(t *testing.T) {
+	tests := []struct {
+		name        string
+		key         string
+		status      *domain.RateLimitStatus
+		ttl         time.Duration
+		redisError  error
+		expectError bool
+	}{
+		{
+			name: "Should set status successfully",
+			key:  "rate_limit:ip:192.168.1.1",
+			status: &domain.RateLimitStatus{
+				Key:       "rate_limit:ip:192.168.1.1",
+				Count:     5,
+				Limit:     10,
+				Window:    60,
+				LastReset: time.Now(),
+				IsBlocked: false,
+			},
+			ttl:         time.Minute,
+			redisError:  nil,
+			expectError: false,
+		},
+		{
+			name: "Should return error on Redis error",
+			key:  "rate_limit:ip:192.168.1.2",
+			status: &domain.RateLimitStatus{
+				Key:   "rate_limit:ip:192.168.1.2",
+				Count: 1,
+			},
+			ttl:         time.Minute,
+			redisError:  errors.New("connection error"),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockClient := new(MockRedisClient)
+			testLogger := logger.NewLogger("debug", "text")
+			
+			storage := &RedisStorage{
+				client: mockClient,
+				logger: testLogger,
+			}
+
+			ctx := context.Background()
+			
+			// Mock espera qualquer JSON válido
+			mockClient.On("Set", ctx, tt.key, mock.AnythingOfType("[]uint8"), tt.ttl).Return(tt.redisError)
+
+			// Act
+			err := storage.Set(ctx, tt.key, tt.status, tt.ttl)
+
+			// Assert
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRedisStorage_Increment(t *testing.T) {
+	tests := []struct {
+		name         string
+		key          string
+		limit        int
+		window       time.Duration
+		luaResult    interface{}
+		luaError     error
+		expectedCount int
+		expectError  bool
+	}{
+		{
+			name:         "Should increment counter successfully",
+			key:          "rate_limit:ip:192.168.1.1",
+			limit:        10,
+			window:       time.Minute,
+			luaResult:    []interface{}{int64(1), int64(time.Now().UnixMilli())},
+			luaError:     nil,
+			expectedCount: 1,
+			expectError:  false,
+		},
+		{
+			name:         "Should return error on Lua script error",
+			key:          "rate_limit:ip:192.168.1.2",
+			limit:        10,
+			window:       time.Minute,
+			luaResult:    nil,
+			luaError:     errors.New("script error"),
+			expectedCount: 0,
+			expectError:  true,
+		},
+		{
+			name:         "Should return error on invalid result format",
+			key:          "rate_limit:ip:192.168.1.3",
+			limit:        10,
+			window:       time.Minute,
+			luaResult:    "invalid result",
+			luaError:     nil,
+			expectedCount: 0,
+			expectError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockClient := new(MockRedisClient)
+			testLogger := logger.NewLogger("debug", "text")
+			
+			storage := &RedisStorage{
+				client: mockClient,
+				logger: testLogger,
+			}
+
+			ctx := context.Background()
+			mockClient.On("Eval", ctx, mock.AnythingOfType("string"), []string{tt.key}, mock.Anything).Return(tt.luaResult, tt.luaError)
+
+			// Act
+			count, _, err := storage.Increment(ctx, tt.key, tt.limit, tt.window)
+
+			// Assert
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Equal(t, 0, count)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedCount, count)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRedisStorage_Block(t *testing.T) {
+	tests := []struct {
+		name           string
+		key            string
+		duration       time.Duration
+		existingStatus *domain.RateLimitStatus
+		getError       error
+		setError       error
+		expectError    bool
+	}{
+		{
+			name:     "Should block key with existing status",
+			key:      "rate_limit:ip:192.168.1.1",
+			duration: 3 * time.Minute,
+			existingStatus: &domain.RateLimitStatus{
+				Key:   "rate_limit:ip:192.168.1.1",
+				Count: 5,
+			},
+			getError:    nil,
+			setError:    nil,
+			expectError: false,
+		},
+		{
+			name:           "Should block key without existing status",
+			key:            "rate_limit:ip:192.168.1.2",
+			duration:       3 * time.Minute,
+			existingStatus: nil,
+			getError:       nil,
+			setError:       nil,
+			expectError:    false,
+		},
+		{
+			name:     "Should return error on Set failure",
+			key:      "rate_limit:ip:192.168.1.3",
+			duration: 3 * time.Minute,
+			existingStatus: &domain.RateLimitStatus{
+				Key: "rate_limit:ip:192.168.1.3",
+			},
+			getError:    nil,
+			setError:    errors.New("set error"),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockClient := new(MockRedisClient)
+			testLogger := logger.NewLogger("debug", "text")
+			
+			storage := &RedisStorage{
+				client: mockClient,
+				logger: testLogger,
+			}
+
+			ctx := context.Background()
+
+			// Mock Get
+			if tt.existingStatus != nil {
+				statusJSON, _ := json.Marshal(tt.existingStatus)
+				mockClient.On("Get", ctx, tt.key).Return(string(statusJSON), tt.getError)
+			} else {
+				mockClient.On("Get", ctx, tt.key).Return("", redis.Nil)
+			}
+
+			// Mock Set
+			mockClient.On("Set", ctx, tt.key, mock.AnythingOfType("[]uint8"), mock.AnythingOfType("time.Duration")).Return(tt.setError)
+
+			// Act
+			err := storage.Block(ctx, tt.key, tt.duration)
+
+			// Assert
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRedisStorage_Reset(t *testing.T) {
+	tests := []struct {
+		name        string
+		key         string
+		redisError  error
+		expectError bool
+	}{
+		{
+			name:        "Should reset key successfully",
+			key:         "rate_limit:ip:192.168.1.1",
+			redisError:  nil,
+			expectError: false,
+		},
+		{
+			name:        "Should return error on Redis error",
+			key:         "rate_limit:ip:192.168.1.2",
+			redisError:  errors.New("delete error"),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockClient := new(MockRedisClient)
+			testLogger := logger.NewLogger("debug", "text")
+			
+			storage := &RedisStorage{
+				client: mockClient,
+				logger: testLogger,
+			}
+
+			ctx := context.Background()
+			mockClient.On("Del", ctx, []string{tt.key}).Return(int64(1), tt.redisError)
+
+			// Act
+			err := storage.Reset(ctx, tt.key)
+
+			// Assert
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestRedisStorage_Health(t *testing.T) {
+	tests := []struct {
+		name        string
+		pingError   error
+		expectError bool
+	}{
+		{
+			name:        "Should return healthy",
+			pingError:   nil,
+			expectError: false,
+		},
+		{
+			name:        "Should return unhealthy on ping error",
+			pingError:   errors.New("connection error"),
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockClient := new(MockRedisClient)
+			testLogger := logger.NewLogger("debug", "text")
+			
+			storage := &RedisStorage{
+				client: mockClient,
+				logger: testLogger,
+			}
+
+			ctx := context.Background()
+			mockClient.On("Ping", ctx).Return(tt.pingError)
+
+			// Act
+			err := storage.Health(ctx)
+
+			// Assert
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
+func TestBuildKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		limiterType domain.LimiterType
+		identifier  string
+		expected    string
+	}{
+		{
+			name:       "Should build IP key correctly",
+			limiterType: domain.IPLimiter,
+			identifier:  "192.168.1.1",
+			expected:    "rate_limit:ip:192.168.1.1",
+		},
+		{
+			name:       "Should build Token key correctly",
+			limiterType: domain.TokenLimiter,
+			identifier:  "abc123def456",
+			expected:    "rate_limit:token:abc123def456",
+		},
+		{
+			name:       "Should handle unknown type",
+			limiterType: domain.LimiterType("unknown"),
+			identifier:  "test",
+			expected:    "rate_limit:unknown:test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Act
+			result := BuildKey(tt.limiterType, tt.identifier)
+
+			// Assert
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+} 

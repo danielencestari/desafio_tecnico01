@@ -1,0 +1,108 @@
+### Rate Limiter API - Manual Testing
+### Use with VS Code REST Client extension
+
+@baseUrl = http://localhost:8080
+
+### 1. Health Check - Should always work
+GET {{baseUrl}}/health
+
+### 2. System Metrics - Should always work  
+GET {{baseUrl}}/metrics
+
+### 3. Main endpoint without token (uses IP limiting)
+GET {{baseUrl}}/
+X-Forwarded-For: 192.168.1.100
+
+### 4. Multiple requests from same IP (should trigger rate limit after 10 requests)
+GET {{baseUrl}}/
+X-Forwarded-For: 192.168.1.101
+
+### 5. Request with premium token (higher limits)
+GET {{baseUrl}}/
+X-Api-Token: premium_token_123
+X-Forwarded-For: 192.168.1.102
+
+### 6. Request with basic token
+GET {{baseUrl}}/
+X-Api-Token: basic_token_456  
+X-Forwarded-For: 192.168.1.103
+
+### 7. Admin - Check status of IP
+GET {{baseUrl}}/admin/status?key=192.168.1.100&type=ip
+
+### 8. Admin - Check status of token
+GET {{baseUrl}}/admin/status?key=premium_token_123&type=token
+
+### 9. Admin - Reset IP counter
+POST {{baseUrl}}/admin/reset
+Content-Type: application/json
+
+{
+  "key": "192.168.1.100",
+  "type": "ip"
+}
+
+### 10. Admin - Reset token counter
+POST {{baseUrl}}/admin/reset
+Content-Type: application/json
+
+{
+  "key": "premium_token_123", 
+  "type": "token"
+}
+
+### 11. Test rate limiting - Multiple rapid requests
+### Execute this multiple times quickly to see 429 response
+GET {{baseUrl}}/
+X-Forwarded-For: 192.168.1.200
+
+### 12. Test with different User-Agent
+GET {{baseUrl}}/
+X-Forwarded-For: 192.168.1.201
+User-Agent: Custom-Client/1.0
+
+### 13. Test token priority over IP
+### First saturate IP limit, then use token
+GET {{baseUrl}}/
+X-Forwarded-For: 192.168.1.202
+
+### 14. Same IP but with token (should work even if IP is rate limited)
+GET {{baseUrl}}/
+X-Api-Token: premium_token_123
+X-Forwarded-For: 192.168.1.202
+
+### 15. Invalid admin request (missing parameters)
+GET {{baseUrl}}/admin/status
+
+### 16. Invalid reset request (missing fields)
+POST {{baseUrl}}/admin/reset
+Content-Type: application/json
+
+{
+  "key": "test"
+}
+
+### 17. Test with malformed JSON  
+POST {{baseUrl}}/admin/reset
+Content-Type: application/json
+
+{
+  "key": "test",
+  "type": "ip"
+  // missing comma, invalid JSON
+}
+
+### 18. Stress test - Execute multiple times to verify concurrent handling
+GET {{baseUrl}}/
+X-Forwarded-For: 192.168.1.{{$randomInt 100 199}}
+
+### 19. Test real-world scenario - Mobile app requests
+GET {{baseUrl}}/
+X-Api-Token: premium_token_123
+X-Forwarded-For: 10.0.0.{{$randomInt 1 100}}
+User-Agent: MyApp/1.0 (iOS 15.0; iPhone13,2)
+
+### 20. Test real-world scenario - Web requests  
+GET {{baseUrl}}/
+X-Forwarded-For: 203.0.113.{{$randomInt 1 100}}
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
